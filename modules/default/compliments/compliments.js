@@ -8,22 +8,23 @@ Module.register("compliments", {
 	// Module config defaults.
 	defaults: {
 		compliments: {
-			anytime: ["Hey there sexy!"],
-			morning: ["Good morning, handsome!", "Enjoy your day!", "How was your sleep?"],
-			afternoon: ["Hello, beauty!", "You look sexy!", "Looking good today!"],
-			evening: ["Wow, you look hot!", "You look nice!", "Hi, sexy!"],
-			"....-01-01": ["Happy new year!"]
+			anytime: ["One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten"]
+			//morning: ["Good morning, handsome!", "Enjoy your day!", "How was your sleep?"],
+			//afternoon: ["Hello, beauty!", "You look sexy!", "Looking good today!"],
+			//evening: ["Wow, you look hot!", "You look nice!", "Hi, sexy!"],
+			//"....-01-01": ["Happy new year!"]
 		},
-		updateInterval: 30000,
+		updateInterval: 60000 * 60,
 		remoteFile: null,
-		fadeSpeed: 4000,
+		fadeSpeed: 1000,
 		morningStartTime: 3,
 		morningEndTime: 12,
 		afternoonStartTime: 12,
 		afternoonEndTime: 17,
-		random: true,
+		random: false,
 		mockDate: null
 	},
+	maxQuotesPerDay: 5,
 	lastIndexUsed: -1,
 	// Set currentweather from module
 	currentWeatherType: "",
@@ -47,10 +48,50 @@ Module.register("compliments", {
 			});
 		}
 
-		// Schedule update timer.
-		setInterval(function () {
-			self.updateDom(self.config.fadeSpeed);
-		}, this.config.updateInterval);
+		/// Current time in ms
+		var currentTime = Number(new Date().getTime());
+		var shiftMsForPerMinute = currentTime % 60000;
+		var shiftMsForPerHour = currentTime % 3600000;
+		var shiftMsForPerDay = Math.round(currentTime % (3600000 * 24));
+
+		var firstInterval = 0;
+
+		if (Math.round(this.config.updateInterval / 1000) == 60) {
+			firstInterval = this.config.updateInterval - shiftMsForPerMinute;
+			Log.info("Found an 'updateInterval' that is exactly 1 minute");
+			Log.info("First interval will last: " + firstInterval / 1000 + "sec");
+			Log.info("Shift is " + shiftMsForPerMinute / 1000 + "sec");
+		}
+
+		if (Math.round(this.config.updateInterval / 1000) == 3600) {
+			firstInterval = this.config.updateInterval - shiftMsForPerHour;
+			Log.info("Found an 'updateInterval' that is exactly 1 hour long");
+			Log.info("First interval will last: " + Math.floor(firstInterval / 60000) + "min");
+			Log.info("Shift is approx. " + Math.floor(shiftMsForPerHour / 60000) + "min");
+		}
+
+		if (Math.round(this.config.updateInterval / 1000) == 3600 * 24) {
+			firstInterval = this.config.updateInterval - shiftMsForPerDay;
+			Log.info("Found an 'updateInterval' that is exactly 1 day long");
+			Log.info("First interval will last: " + Math.floor(firstInterval / 3600000) + "hr and " + (Math.floor(firstInterval / 60000) % 60) + "min");
+			Log.info("Shift is approx. " + Math.floor(shiftMsForPerDay / 3600000) + "hr and " + (Math.floor(shiftMsForPerDay / 60000) % 60) + "min");
+		}
+
+		if (firstInterval == 0) {
+			Log.info("No 'updateInterval' found that is either 1 minute, 1 hour or 1 day long");
+			setInterval(function () {
+				self.updateDom(self.config.fadeSpeed);
+			}, self.config.updateInterval);
+		} else {
+			// set a timeout that shifts to the whole minute, hour or day, so that the interval can start later
+			setTimeout(function () {
+				// Schedule subsequent update timers.
+				self.updateDom(self.config.fadeSpeed);
+				setInterval(function () {
+					self.updateDom(self.config.fadeSpeed);
+				}, self.config.updateInterval);
+			}, firstInterval);
+		}
 	},
 
 	/* randomIndex(compliments)
@@ -144,6 +185,20 @@ Module.register("compliments", {
 		var compliments = this.complimentArray();
 		// variable for index to next message to display
 		let index = 0;
+
+		// get current day
+		var now = new Date();
+		var start = new Date(now.getFullYear(), 0, 0);
+		var diff = now - start + (start.getTimezoneOffset() - now.getTimezoneOffset()) * 60 * 1000;
+		var today = Math.floor(diff / (1000 * 60 * 60 * 24)) + 1;
+		var factor = Math.floor(compliments.length / this.maxQuotesPerDay);
+		var startIndex = (today % factor) * this.maxQuotesPerDay;
+
+		if (this.lastIndexUsed == -1) {
+			// start where we ended after a restart
+			this.lastIndexUsed = this.getCookie("lastQuoteIndex") != null ? parseInt(this.getCookie("lastQuoteIndex")) - 1 : -1;
+		}
+
 		// are we randomizing
 		if (this.config.random) {
 			// yes
@@ -151,10 +206,17 @@ Module.register("compliments", {
 		} else {
 			// no, sequential
 			// if doing sequential, don't fall off the end
-			index = this.lastIndexUsed >= compliments.length - 1 ? 0 : ++this.lastIndexUsed;
+			if (this.lastIndexUsed >= this.maxQuotesPerDay - 1) {
+				index = 0;
+				this.lastIndexUsed = 0;
+			} else {
+				index = ++this.lastIndexUsed;
+			}
+			// remember position in case of restart
+			this.setCookie("lastQuoteIndex", this.lastIndexUsed.toString(), 365);
 		}
 
-		return compliments[index] || "";
+		return compliments[index + startIndex] || "";
 	},
 
 	// Override dom generator.
@@ -211,5 +273,30 @@ Module.register("compliments", {
 		if (notification === "CURRENTWEATHER_DATA") {
 			this.setCurrentWeatherType(payload.data);
 		}
+	},
+
+	setCookie: function (name, value, days) {
+		var expires = "";
+		if (days) {
+			var date = new Date();
+			date.setTime(date.getTime() + days * 24 * 60 * 60 * 1000);
+			expires = "; expires=" + date.toUTCString();
+		}
+		document.cookie = name + "=" + (value || "") + expires + "; path=/";
+	},
+
+	getCookie: function (name) {
+		var nameEQ = name + "=";
+		var ca = document.cookie.split(";");
+		for (var i = 0; i < ca.length; i++) {
+			var c = ca[i];
+			while (c.charAt(0) == " ") c = c.substring(1, c.length);
+			if (c.indexOf(nameEQ) == 0) return c.substring(nameEQ.length, c.length);
+		}
+		return null;
+	},
+
+	eraseCookie: function (name) {
+		document.cookie = name + "=; Path=/; Expires=Thu, 01 Jan 1970 00:00:01 GMT;";
 	}
 });
